@@ -1,53 +1,66 @@
-const verifyRestTime = require("../utils/verifyRestTime");
-const verifyToken = require("../utils/verifyToken");
-const Driver = require("../models/Drivers");
-const Taxi = require("../models/Taxis");
-const Folio = require("../models/Folios");
+// src/routes/folios.js
+const { Router }         = require("express");
+const verifyToken        = require("../utils/verifyToken");
+const verifyWorkingTime  = require("../utils/verifyWorkingTime"); // Debe exportar la función directamente
+const Driver             = require("../models/Drivers");
+const Taxi               = require("../models/Taxis");
+const Folio              = require("../models/Folios");
+const workingTimeService = require("../services/workingTime.service");
 
-const { Router } = require("express");
-const verifyWorkingTime = require("../utils/verifyWorkingTime");
 const router = Router();
 
-// get folios
+// ── GET /folios ──────────────────────────────────────────────────────────────
 router.get("/", verifyToken, async (req, res) => {
   try {
     const folios = await Folio.find();
     res.json(folios);
-  } catch (error) {
-    res.status(400).json("Error: " + error);
-    console.log(error);
+  } catch (err) {
+    console.error("Error en GET /folios:", err);
+    res.status(500).json("Error al obtener folios");
   }
 });
 
-// post folio
+// ── POST /folios ─────────────────────────────────────────────────────────────
+router.post(
+  "/",
+  verifyToken,
+  verifyWorkingTime,  // middleware que valida horas trabajadas
+  async (req, res) => {
+    const { taxiNumber, folio, user } = req.body;
 
-router.post("/", verifyToken, verifyWorkingTime, async (req, res) => {
-  const { taxiNumber, driverID, folio, date, user } = req.body;
+    try {
+      // 1) Verificar taxi en la fila
+      const foundTaxi = await Taxi.findOne({ taxiNumber });
+      if (!foundTaxi) {
+        return res.status(400).json("El taxi no está en la fila");
+      }
 
-  const foundTaxi = await Taxi.findOne({ taxiNumber });
+      // 2) Cargar conductor para cerrar turno
+      const driver = await Driver.findOne({ driverID: foundTaxi.driverID });
+      if (!driver) {
+        return res.status(400).json("Conductor no encontrado");
+      }
 
-  if (!foundTaxi) {
-    console.log("taxi no found");
-    return res.status(400).json("El taxi no está formado");
+      // 3) Crear y guardar el folio
+      const newFolio = await new Folio({
+        taxiNumber,
+        driverID: foundTaxi.driverID,
+        folio,
+        date: new Date(),
+        user,
+      }).save();
+
+
+      // 4) Eliminar taxi de la fila
+      await Taxi.deleteOne({ taxiNumber });
+
+      // 5) Responder con el folio creado
+      res.json(newFolio);
+    } catch (err) {
+      console.error("Error en POST /folios:", err);
+      res.status(500).json("Error al guardar el folio");
+    }
   }
-
-  const folioData = new Folio({
-    taxiNumber,
-    driverID: foundTaxi.driverID,
-    folio,
-    date: new Date(),
-    user,
-  });
-
-  try {
-    const newFolio = await folioData.save();
-    const taxi = await Taxi.findOneAndDelete({ taxiNumber });
-    res.json(newFolio);
-    console.log("Folio guardado");
-  } catch (error) {
-    res.status(400).json("Error: " + error);
-    console.log(error);
-  }
-});
+);
 
 module.exports = router;
